@@ -3,3 +3,4 @@ google-cloud-aiplatform>=1.38
 google-auth
 python-docx
 PyPDF2
+tiktoken
