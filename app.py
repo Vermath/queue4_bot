@@ -11,7 +11,7 @@ from PyPDF2 import PdfReader
 from io import BytesIO
 
 # Constants
-MAX_TOTAL_TOKENS = 1950000  # Adjust based on model limitations
+MAX_TOTAL_TOKENS = 1000000  # You can adjust this value based on model limitations
 
 # -------------------- File Reading Functions -------------------- #
 
@@ -65,7 +65,7 @@ def process_uploaded_files(uploaded_files):
                 st.warning(f"Unsupported file type: {uploaded_file.name}")
         except Exception as e:
             st.error(f"Could not read file {uploaded_file.name}: {str(e)}")
-    return "\n".join(document_contents)
+    return '\n'.join(document_contents)
 
 def process_zip_file(zip_file):
     """Extract and process text files from a ZIP archive."""
@@ -101,52 +101,41 @@ def process_zip_file(zip_file):
 
 # -------------------- Utility Functions -------------------- #
 
-def chunk_content(text, model, max_tokens=MAX_TOTAL_TOKENS):
-    """Split text into chunks based on token count."""
-    tokens = model.count_tokens(text).total_tokens
-    if tokens <= max_tokens:
-        return [text]
-    else:
-        words = text.split()
-        chunks = []
-        current_chunk = []
-        current_tokens = 0
-        for word in words:
-            word_tokens = model.count_tokens(word + ' ').total_tokens
-            if current_tokens + word_tokens > max_tokens:
-                chunks.append(' '.join(current_chunk))
-                current_chunk = [word]
-                current_tokens = word_tokens
-            else:
-                current_chunk.append(word)
-                current_tokens += word_tokens
-        if current_chunk:
-            chunks.append(' '.join(current_chunk))
-        return chunks
+def chunk_content(text, max_length=5000):
+    """Split text into smaller chunks to avoid exceeding token limits."""
+    return [text[i:i+max_length] for i in range(0, len(text), max_length)]
 
 def summarize_content(content, model):
     """Summarize content that exceeds token limits."""
     st.info("Content is large. Summarizing to fit the model's context window...")
     prompt = f"Summarize the following content:\n\n{content}"
-    response = model.generate_content(prompt)
-    return response.text
+    try:
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        st.error(f"Error summarizing content: {str(e)}")
+        return ""
 
 # -------------------- Main Functionality -------------------- #
 
 def ask_gemini(question, context, model, temperature, max_output_tokens):
     """Generate an answer from the Gemini model based on the question and context."""
-    chunks = chunk_content(context, model)
+    chunks = chunk_content(context)
     responses = []
     
     progress_bar = st.progress(0)
     for idx, chunk in enumerate(chunks):
         prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
-        response = model.generate_content(
-            prompt,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens
-        )
-        responses.append(response.text)
+        try:
+            response = model.generate_content(
+                prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens
+            )
+            responses.append(response.text)
+        except Exception as e:
+            st.error(f"Error from Gemini API: {str(e)}")
+            return ""  # Stop processing if there's an error
         progress_bar.progress((idx + 1) / len(chunks))
     
     progress_bar.empty()
@@ -154,12 +143,16 @@ def ask_gemini(question, context, model, temperature, max_output_tokens):
     if len(responses) > 1:
         # Combine and summarize responses
         final_prompt = f"Summarize the following responses to the question: '{question}'\n\n" + "\n\n".join(responses)
-        final_response = model.generate_content(
-            final_prompt,
-            temperature=temperature,
-            max_output_tokens=max_output_tokens
-        )
-        return final_response.text
+        try:
+            final_response = model.generate_content(
+                final_prompt,
+                temperature=temperature,
+                max_output_tokens=max_output_tokens
+            )
+            return final_response.text
+        except Exception as e:
+            st.error(f"Error from Gemini API during summarization: {str(e)}")
+            return ""
     else:
         return responses[0]
 
@@ -176,7 +169,7 @@ def main():
     - Adjust the model parameters if necessary.
     - Click 'Get Answer' to receive a response from the Gemini model.
     """)
-
+    
     # Load service account credentials from secrets
     credentials = service_account.Credentials.from_service_account_info(st.secrets["service_account"])
     
@@ -191,7 +184,7 @@ def main():
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=1024, value=256)
+    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=256)
     
     # File uploader to upload multiple files, including ZIP files
     uploaded_files = st.file_uploader(
@@ -208,9 +201,8 @@ def main():
                 if full_document_content.strip() == "":
                     st.error("No valid text content found in the uploaded files.")
                     return
-                # Check total token count
-                total_tokens = model.count_tokens(full_document_content).total_tokens
-                if total_tokens > MAX_TOTAL_TOKENS:
+                # Optionally summarize content if too large
+                if len(full_document_content) > 500000:  # Arbitrary limit, adjust as needed
                     full_document_content = summarize_content(full_document_content, model)
                 # Cache the content and files hash
                 st.session_state['document_contents'] = full_document_content
@@ -225,25 +217,14 @@ def main():
     # User input
     user_question = st.text_input("Ask a question about the uploaded documents:")
     
-    # Token counting button
-    if st.button("Count Tokens"):
-        if user_question:
-            question_tokens = model.count_tokens(user_question).total_tokens
-            context_tokens = model.count_tokens(full_document_content).total_tokens
-            
-            st.write(f"**Question Token Count:** {question_tokens}")
-            st.write(f"**Context Token Count:** {context_tokens}")
-            st.write(f"**Total Token Count:** {question_tokens + context_tokens}")
-        else:
-            st.warning("Please enter a question.")
-    
     if st.button("Get Answer"):
         if user_question:
             with st.spinner("Generating answer... This may take a while."):
                 try:
                     answer = ask_gemini(user_question, full_document_content, model, temperature, max_output_tokens)
-                    st.subheader("Answer:")
-                    st.write(answer)
+                    if answer:
+                        st.subheader("Answer:")
+                        st.write(answer)
                 except Exception as e:
                     st.error(f"Error processing request: {str(e)}")
         else:
