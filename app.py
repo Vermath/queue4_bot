@@ -10,9 +10,6 @@ from google.oauth2 import service_account
 from PyPDF2 import PdfReader
 from io import BytesIO
 
-# Constants
-MAX_TOTAL_TOKENS = 1000000  # You can adjust this value based on model limitations
-
 # -------------------- File Reading Functions -------------------- #
 
 def read_docx(file):
@@ -116,6 +113,20 @@ def summarize_content(content, model):
         st.error(f"Error summarizing content: {str(e)}")
         return ""
 
+def count_tokens(text, model, chunk_size=10000):
+    """Count tokens in text by processing in chunks."""
+    total_tokens = 0
+    text_length = len(text)
+    for i in range(0, text_length, chunk_size):
+        chunk = text[i:i+chunk_size]
+        try:
+            tokens = model.count_tokens(chunk).total_tokens
+            total_tokens += tokens
+        except Exception as e:
+            st.error(f"Error counting tokens in chunk: {str(e)}")
+            return None
+    return total_tokens
+
 # -------------------- Main Functionality -------------------- #
 
 def ask_gemini(question, context, model, temperature, max_output_tokens):
@@ -181,6 +192,14 @@ def main():
     selected_model = st.selectbox("Select Gemini Model:", model_options)
     model = GenerativeModel(selected_model)
     
+    # Set MAX_TOTAL_TOKENS based on selected model
+    if selected_model == "gemini-1.5-flash-001":
+        MAX_TOTAL_TOKENS = 950_000
+    elif selected_model == "gemini-1.5-pro-001":
+        MAX_TOTAL_TOKENS = 1_950_000
+    else:
+        MAX_TOTAL_TOKENS = 8000  # default
+    
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
@@ -194,19 +213,22 @@ def main():
     )
     
     if uploaded_files:
-        if 'document_contents' not in st.session_state or st.session_state.get('files_hash') != hash(tuple(uploaded_files)):
+        # Create a hashable representation of the uploaded files
+        files_info = tuple((f.name, f.size) for f in uploaded_files)
+        if 'document_contents' not in st.session_state or st.session_state.get('files_hash') != hash(files_info):
             with st.spinner("Processing uploaded files..."):
                 # Process the uploaded files
                 full_document_content = process_uploaded_files(uploaded_files)
                 if full_document_content.strip() == "":
                     st.error("No valid text content found in the uploaded files.")
                     return
-                # Optionally summarize content if too large
-                if len(full_document_content) > 500000:  # Arbitrary limit, adjust as needed
+                # Approximate total tokens
+                approx_total_tokens = len(full_document_content) / 4  # Approximate 4 characters per token
+                if approx_total_tokens > MAX_TOTAL_TOKENS:
                     full_document_content = summarize_content(full_document_content, model)
                 # Cache the content and files hash
                 st.session_state['document_contents'] = full_document_content
-                st.session_state['files_hash'] = hash(tuple(uploaded_files))
+                st.session_state['files_hash'] = hash(files_info)
                 st.success("Documents loaded successfully!")
         else:
             full_document_content = st.session_state['document_contents']
@@ -216,6 +238,23 @@ def main():
     
     # User input
     user_question = st.text_input("Ask a question about the uploaded documents:")
+    
+    # Token counting button
+    if st.button("Count Tokens"):
+        if user_question:
+            try:
+                question_tokens = model.count_tokens(user_question).total_tokens
+                context_tokens = count_tokens(full_document_content, model)
+                if context_tokens is not None:
+                    st.write(f"**Question Token Count:** {question_tokens}")
+                    st.write(f"**Context Token Count:** {context_tokens}")
+                    st.write(f"**Total Token Count:** {question_tokens + context_tokens}")
+                else:
+                    st.error("Error counting tokens in context.")
+            except Exception as e:
+                st.error(f"Error counting tokens: {str(e)}")
+        else:
+            st.warning("Please enter a question.")
     
     if st.button("Get Answer"):
         if user_question:
