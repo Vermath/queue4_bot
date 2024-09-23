@@ -1,6 +1,6 @@
 import streamlit as st
 import vertexai
-from vertexai.generative_models import GenerativeModel
+from vertexai.generative_models import GenerationConfig, GenerativeModel
 import docx
 import zipfile
 import tempfile
@@ -106,12 +106,12 @@ def chunk_content(text, max_length=5000):
     """Split text into smaller chunks to avoid exceeding token limits."""
     return [text[i:i+max_length] for i in range(0, len(text), max_length)]
 
-def summarize_content(content, model):
+def summarize_content(content, model, generation_config):
     """Summarize content that exceeds token limits."""
     st.info("Content is large. Summarizing to fit the model's context window...")
     prompt = f"Summarize the following content:\n\n{content}"
     try:
-        response = model.generate_content(prompt)
+        response = model.generate_content(prompt, generation_config=generation_config)
         return response.text
     except Exception as e:
         st.error(f"Error summarizing content: {str(e)}")
@@ -134,7 +134,7 @@ def count_tokens(text, chunk_size=10000):
 
 # -------------------- Main Functionality -------------------- #
 
-def ask_gemini(question, context, model):
+def ask_gemini(question, context, model, generation_config):
     """Generate an answer from the Gemini model based on the question and context."""
     chunks = chunk_content(context)
     responses = []
@@ -143,7 +143,7 @@ def ask_gemini(question, context, model):
     for idx, chunk in enumerate(chunks):
         prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
         try:
-            response = model.generate_content(prompt)
+            response = model.generate_content(prompt, generation_config=generation_config)
             responses.append(response.text)
         except Exception as e:
             st.error(f"Error from Gemini API: {str(e)}")
@@ -156,7 +156,7 @@ def ask_gemini(question, context, model):
         # Combine and summarize responses
         final_prompt = f"Summarize the following responses to the question: '{question}'\n\n" + "\n\n".join(responses)
         try:
-            final_response = model.generate_content(final_prompt)
+            final_response = model.generate_content(final_prompt, generation_config=generation_config)
             return final_response.text
         except Exception as e:
             st.error(f"Error from Gemini API during summarization: {str(e)}")
@@ -192,6 +192,8 @@ def main():
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
     max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=256)
+    top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=1.0)
+    top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
     
     # Set MAX_TOTAL_TOKENS based on selected model
     if selected_model == "gemini-1.5-flash-001":
@@ -201,8 +203,16 @@ def main():
     else:
         MAX_TOTAL_TOKENS = 8000  # default
     
-    # Create the model with parameters
-    model = GenerativeModel(selected_model).with_parameters(temperature=temperature, max_output_tokens=max_output_tokens)
+    # Create the model
+    model = GenerativeModel(selected_model)
+    
+    # Create the generation config
+    generation_config = GenerationConfig(
+        temperature=temperature,
+        max_output_tokens=max_output_tokens,
+        top_p=top_p,
+        top_k=top_k
+    )
     
     # File uploader to upload multiple files, including ZIP files
     uploaded_files = st.file_uploader(
@@ -224,7 +234,7 @@ def main():
                 # Use tiktoken to count tokens
                 context_tokens = count_tokens(full_document_content)
                 if context_tokens > MAX_TOTAL_TOKENS:
-                    full_document_content = summarize_content(full_document_content, model)
+                    full_document_content = summarize_content(full_document_content, model, generation_config)
                 # Cache the content and files hash
                 st.session_state['document_contents'] = full_document_content
                 st.session_state['files_hash'] = hash(files_info)
@@ -256,7 +266,7 @@ def main():
         if user_question:
             with st.spinner("Generating answer... This may take a while."):
                 try:
-                    answer = ask_gemini(user_question, full_document_content, model)
+                    answer = ask_gemini(user_question, full_document_content, model, generation_config)
                     if answer:
                         st.subheader("Answer:")
                         st.write(answer)
