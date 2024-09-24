@@ -181,6 +181,10 @@ def main():
     - Enter a question related to the content of the documents.
     - Adjust the model parameters if necessary.
     - Click 'Get Answer' to receive a response from the Gemini model.
+    - You can adjust settings on the lefthand side but they should be setup to work well for most use cases.
+    - Please note that the model is not perfect and may not always provide accurate answers.
+    - Please be patient as the model may take a few minutes to respond.
+    - You can modify the sytem prompt to change the behavior of the model by clicking the checkbox after file upload.
     """)
     
     # Load service account credentials from secrets
@@ -196,7 +200,7 @@ def main():
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=256)
+    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=8192)
     top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=1.0)
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
     
