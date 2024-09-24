@@ -194,7 +194,7 @@ def main():
     vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
     
     # Model selection
-    model_options = ["gemini-1.5-flash-001", "gemini-1.5-pro-001"]
+    model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
     selected_model = st.selectbox("Select Gemini Model:", model_options)
     
     # Parameter adjustments
@@ -205,9 +205,9 @@ def main():
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
     
     # Set MAX_TOTAL_TOKENS based on selected model
-    if selected_model == "gemini-1.5-flash-001":
+    if selected_model == "gemini-1.5-flash-002":
         MAX_TOTAL_TOKENS = 950_000
-    elif selected_model == "gemini-1.5-pro-001":
+    elif selected_model == "gemini-1.5-pro-002":
         MAX_TOTAL_TOKENS = 1_950_000
     else:
         MAX_TOTAL_TOKENS = 8000  # default
