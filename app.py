@@ -134,14 +134,17 @@ def count_tokens(text, chunk_size=10000):
 
 # -------------------- Main Functionality -------------------- #
 
-def ask_gemini(question, context, model, generation_config):
+def ask_gemini(question, context, model, generation_config, system_prompt=""):
     """Generate an answer from the Gemini model based on the question and context."""
     chunks = chunk_content(context)
     responses = []
     
     progress_bar = st.progress(0)
     for idx, chunk in enumerate(chunks):
-        prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
+        if system_prompt:
+            prompt = f"{system_prompt}\n\nContext:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
+        else:
+            prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
         try:
             response = model.generate_content(prompt, generation_config=generation_config)
             responses.append(response.text)
@@ -155,6 +158,8 @@ def ask_gemini(question, context, model, generation_config):
     if len(responses) > 1:
         # Combine and summarize responses
         final_prompt = f"Summarize the following responses to the question: '{question}'\n\n" + "\n\n".join(responses)
+        if system_prompt:
+            final_prompt = f"{system_prompt}\n\n{final_prompt}"
         try:
             final_response = model.generate_content(final_prompt, generation_config=generation_config)
             return final_response.text
@@ -248,6 +253,13 @@ def main():
     # User input
     user_question = st.text_input("Ask a question about the uploaded documents:")
     
+    # Custom system prompt
+    use_custom_system_prompt = st.checkbox("Use custom system prompt")
+    if use_custom_system_prompt:
+        system_prompt = st.text_area("Enter system prompt:")
+    else:
+        system_prompt = ""  # You can set a default system prompt here if desired
+    
     # Token counting button
     if st.button("Count Tokens"):
         if user_question:
@@ -266,7 +278,7 @@ def main():
         if user_question:
             with st.spinner("Generating answer... This may take a while."):
                 try:
-                    answer = ask_gemini(user_question, full_document_content, model, generation_config)
+                    answer = ask_gemini(user_question, full_document_content, model, generation_config, system_prompt)
                     if answer:
                         st.subheader("Answer:")
                         st.write(answer)
