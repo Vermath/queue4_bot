@@ -182,7 +182,7 @@ def main():
     credentials = service_account.Credentials.from_service_account_info(st.secrets["service_account"])
     
     # Initialize Vertex AI with credentials
-    vertexai.init(project="your-project-id", location="us-central1", credentials=credentials)
+    vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
     
     # Model selection
     model_options = ["gemini-1.5-flash-001", "gemini-1.5-pro-001"]
