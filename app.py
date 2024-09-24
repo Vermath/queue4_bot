@@ -106,16 +106,22 @@ def chunk_content(text, max_length=5000):
     """Split text into smaller chunks to avoid exceeding token limits."""
     return [text[i:i+max_length] for i in range(0, len(text), max_length)]
 
-def summarize_content(content, model, generation_config):
-    """Summarize content that exceeds token limits."""
-    st.info("Content is large. Summarizing to fit the model's context window...")
-    prompt = f"Summarize the following content:\n\n{content}"
-    try:
-        response = model.generate_content(prompt, generation_config=generation_config)
-        return response.text
-    except Exception as e:
-        st.error(f"Error summarizing content: {str(e)}")
-        return ""
+def chunk_and_summarize_content(content, model, generation_config):
+    """Chunk and summarize content that exceeds token limits."""
+    st.info("Content is large. Summarizing in chunks to fit the model's context window...")
+    chunks = chunk_content(content, max_length=5000)  # Adjust chunk size as needed
+    summaries = []
+    for idx, chunk in enumerate(chunks):
+        prompt = f"Summarize the following content, listing the main topics discussed and how many times each topic appears:\n\n{chunk}"
+        try:
+            response = model.generate_content(prompt, generation_config=generation_config)
+            summaries.append(response.text)
+        except Exception as e:
+            st.error(f"Error summarizing chunk {idx+1}: {str(e)}")
+            return None
+    # Combine summaries
+    combined_summary = "\n".join(summaries)
+    return combined_summary
 
 def count_tokens_tiktoken(text):
     """Count tokens in text using tiktoken."""
@@ -136,7 +142,7 @@ def count_tokens(text, chunk_size=10000):
 
 def ask_gemini(question, context, model, generation_config, system_prompt=""):
     """Generate an answer from the Gemini model based on the question and context."""
-    chunks = chunk_content(context)
+    chunks = chunk_content(context, max_length=5000)
     responses = []
     
     progress_bar = st.progress(0)
@@ -181,17 +187,17 @@ def main():
     - Enter a question related to the content of the documents.
     - Adjust the model parameters if necessary.
     - Click 'Get Answer' to receive a response from the Gemini model.
-    - You can adjust settings on the lefthand side but they should be setup to work well for most use cases.
+    - You can adjust settings on the left-hand side, but they are set up to work well for most use cases.
     - Please note that the model is not perfect and may not always provide accurate answers.
     - Please be patient as the model may take a few minutes to respond.
-    - You can modify the sytem prompt to change the behavior of the model by clicking the checkbox after file upload.
+    - You can modify the system prompt to change the behavior of the model by clicking the checkbox after file upload.
     """)
     
     # Load service account credentials from secrets
     credentials = service_account.Credentials.from_service_account_info(st.secrets["service_account"])
     
     # Initialize Vertex AI with credentials
-    vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
+    vertexai.init(project="your-project-id", location="us-central1", credentials=credentials)
     
     # Model selection
     model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
@@ -243,7 +249,13 @@ def main():
                 # Use tiktoken to count tokens
                 context_tokens = count_tokens(full_document_content)
                 if context_tokens > MAX_TOTAL_TOKENS:
-                    full_document_content = summarize_content(full_document_content, model, generation_config)
+                    # Warn the user about potential loss of granularity
+                    st.warning("The uploaded documents exceed the model's maximum context size. The content will be summarized, which may reduce granularity and affect accuracy.")
+                    summarized_content = chunk_and_summarize_content(full_document_content, model, generation_config)
+                    if summarized_content is None:
+                        st.error("Error during summarization.")
+                        return
+                    full_document_content = summarized_content
                 # Cache the content and files hash
                 st.session_state['document_contents'] = full_document_content
                 st.session_state['files_hash'] = hash(files_info)
