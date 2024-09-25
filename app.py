@@ -216,7 +216,7 @@ def main():
     # Instructions
     st.write("""
     **Instructions:**
-    - Upload your text-based documents (.txt, .docx, .pdf, or .zip files).
+    - Upload your text-based documents (.txt, .docx, .pdf) or a ZIP file containing these documents.
     - Enter a question related to the content of the documents.
     - Adjust the model parameters if necessary.
     - Click 'Get Answer' to receive a response from the Gemini model.
@@ -225,35 +225,35 @@ def main():
     - Please be patient as the model may take a few minutes to respond.
     - You can modify the system prompt to change the behavior of the model by clicking the checkbox after file upload.
     """)
-
+    
     # Load service account credentials from secrets
     credentials = service_account.Credentials.from_service_account_info(st.secrets["service_account"])
-
+    
     # Initialize Vertex AI with credentials
     vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
-
+    
     # Model selection
     model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
     selected_model = st.selectbox("Select Gemini Model:", model_options)
-
+    
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=1024, value=512)
+    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=512)
     top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=0.95)
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
-
-    # Set MAX_CONTEXT_TOKENS based on model
+    
+    # Set MAX_CONTEXT_TOKENS based on selected model
     if selected_model == "gemini-1.5-flash-002":
         MAX_CONTEXT_TOKENS = 950_000
     elif selected_model == "gemini-1.5-pro-002":
         MAX_CONTEXT_TOKENS = 1_950_000
     else:
         MAX_CONTEXT_TOKENS = 8192  # default
-
+    
     # Create the model
     model = GenerativeModel(selected_model)
-
+    
     # Create the generation config
     generation_config = GenerationConfig(
         temperature=temperature,
@@ -261,14 +261,14 @@ def main():
         top_p=top_p,
         top_k=top_k
     )
-
+    
     # File uploader to upload multiple files, including ZIP files
     uploaded_files = st.file_uploader(
         "Upload .txt, .docx, .pdf, or .zip files",
         type=["txt", "docx", "pdf", "zip"],
         accept_multiple_files=True
     )
-
+    
     if uploaded_files:
         # Create a hashable representation of the uploaded files
         files_info = tuple((f.name, f.size) for f in uploaded_files)
@@ -288,17 +288,17 @@ def main():
     else:
         st.info("Please upload files to proceed.")
         return
-
+    
     # User input
     user_question = st.text_input("Ask a question about the uploaded documents:")
-
+    
     # Custom system prompt
     use_custom_system_prompt = st.checkbox("Use custom system prompt")
     if use_custom_system_prompt:
         system_prompt = st.text_area("Enter system prompt:")
     else:
         system_prompt = ""  # You can set a default system prompt here if desired
-
+    
     # Token counting button
     if st.button("Count Tokens"):
         if user_question:
@@ -313,14 +313,14 @@ def main():
                 st.error(f"Error counting tokens: {str(e)}")
         else:
             st.warning("Please enter a question.")
-
+    
     if st.button("Get Answer"):
         if user_question:
             # Check if total tokens exceed the model's limit
             question_tokens = count_tokens(user_question)
             context_tokens = count_tokens(full_document_content)
             total_tokens = question_tokens + context_tokens
-
+            
             if total_tokens > MAX_CONTEXT_TOKENS:
                 # Warn the user about potential loss of granularity
                 st.warning("The combined content and question exceed the model's maximum context size. The content will be summarized based on your question, which may reduce granularity and affect accuracy.")
@@ -338,7 +338,7 @@ def main():
             else:
                 # Use the original content
                 full_document_content = st.session_state['document_contents']
-
+            
             with st.spinner("Generating answer... This may take a while."):
                 try:
                     answer = ask_gemini(user_question, full_document_content, model, generation_config, system_prompt, max_context_tokens=MAX_CONTEXT_TOKENS)
