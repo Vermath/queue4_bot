@@ -216,7 +216,7 @@ def main():
     # Instructions
     st.write("""
     **Instructions:**
-    - Upload your text-based documents (.txt, .docx, .pdf) or a ZIP file containing these documents.
+    - Upload your text-based documents (.txt, .docx, .pdf, or .zip files).
     - Enter a question related to the content of the documents.
     - Adjust the model parameters if necessary.
     - Click 'Get Answer' to receive a response from the Gemini model.
@@ -244,7 +244,12 @@ def main():
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
 
     # Set MAX_CONTEXT_TOKENS based on model
-    MAX_CONTEXT_TOKENS = 8192  # Adjust based on the actual model's context size
+    if selected_model == "gemini-1.5-flash-002":
+        MAX_CONTEXT_TOKENS = 950_000
+    elif selected_model == "gemini-1.5-pro-002":
+        MAX_CONTEXT_TOKENS = 1_950_000
+    else:
+        MAX_CONTEXT_TOKENS = 8192  # default
 
     # Create the model
     model = GenerativeModel(selected_model)
