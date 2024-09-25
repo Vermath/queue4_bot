@@ -151,7 +151,7 @@ def count_tokens(text, chunk_size=10000):
 
 # -------------------- Main Functionality -------------------- #
 
-def ask_gemini(question, context, model, generation_config, system_prompt="", max_context_tokens=8192):
+def ask_gemini(question, context, model, generation_config, system_prompt="", max_context_tokens=8192, max_output_tokens=8000):
     """Generate an answer from the Gemini model based on the question and context."""
     # Calculate tokens used by the question and system prompt
     prompt_text = ""
@@ -161,9 +161,8 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
     prompt_tokens = count_tokens(prompt_text)
     
     # Calculate available tokens for context
-    max_output_tokens = generation_config.max_output_tokens
     available_tokens_for_context = max_context_tokens - prompt_tokens - max_output_tokens - 100  # reserve 100 tokens as buffer
-    
+
     if available_tokens_for_context <= 0:
         st.error("The question and system prompt are too long to fit in the context window.")
         return ""
@@ -200,8 +199,8 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
             st.error("The combined responses are too long to summarize.")
             return ""
         try:
-            final_response = model.generate_content(final_prompt, generation_config=generation_config)
-            return final_response.text
+            response = model.generate_content(final_prompt, generation_config=generation_config)
+            return response.text
         except Exception as e:
             st.error(f"Error from Gemini API during summarization: {str(e)}")
             return ""
@@ -239,7 +238,7 @@ def main():
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=512)
+    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=8000)
     top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=0.95)
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
     
@@ -341,7 +340,15 @@ def main():
             
             with st.spinner("Generating answer... This may take a while."):
                 try:
-                    answer = ask_gemini(user_question, full_document_content, model, generation_config, system_prompt, max_context_tokens=MAX_CONTEXT_TOKENS)
+                    answer = ask_gemini(
+                        user_question,
+                        full_document_content,
+                        model,
+                        generation_config,
+                        system_prompt,
+                        max_context_tokens=MAX_CONTEXT_TOKENS,
+                        max_output_tokens=max_output_tokens
+                    )
                     if answer:
                         st.subheader("Answer:")
                         st.write(answer)
