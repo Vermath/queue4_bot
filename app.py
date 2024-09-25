@@ -133,10 +133,9 @@ def count_tokens(text, chunk_size=10000):
 
 # -------------------- Main Functionality -------------------- #
 
-def chunk_and_summarize_content(content, model, generation_config, selected_model):
+def chunk_and_summarize_content(content, question, model, generation_config, selected_model):
     """Chunk and summarize content that exceeds token limits."""
-    st.info("Content is large. Summarizing in chunks to fit the model's context window...")
-
+    st.info("Content is large. Summarizing in chunks to focus on the question...")
     # Set chunk size and rate limits based on model
     if selected_model == "gemini-1.5-flash-002":
         MAX_CONTEXT_TOKENS = 950_000
@@ -154,7 +153,6 @@ def chunk_and_summarize_content(content, model, generation_config, selected_mode
     overhead_tokens = 2000  # Reserve tokens for prompt and overhead
     max_tokens_per_chunk = MAX_CONTEXT_TOKENS - overhead_tokens
     # We may choose to set a smaller chunk size to avoid hitting rate limits
-    # For example, set chunk_size_tokens to 100,000
     chunk_size_tokens = min(100_000, max_tokens_per_chunk)
 
     chunks = chunk_content_by_tokens(content, chunk_size_tokens)
@@ -167,7 +165,14 @@ def chunk_and_summarize_content(content, model, generation_config, selected_mode
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = []
         for idx, chunk in enumerate(chunks):
-            prompt = f"Summarize the following content, listing the main topics discussed and how many times each topic appears:\n\n{chunk}"
+            prompt = f"""
+You are an expert assistant. Based on the following content, extract information that is relevant to the question: '{question}'.
+
+Content:
+{chunk}
+
+Provide a concise summary that focuses only on the parts of the content that are most relevant to the question.
+"""
             future = executor.submit(model.generate_content, prompt, generation_config=generation_config)
             futures.append((idx, future))
 
@@ -199,7 +204,6 @@ def ask_gemini(question, context, model, generation_config, selected_model, syst
     overhead_tokens = 2000  # Reserve tokens for prompt and overhead
     max_tokens_per_chunk = MAX_CONTEXT_TOKENS - overhead_tokens
     # We may choose to set a smaller chunk size to avoid hitting rate limits
-    # For example, set chunk_size_tokens to 100,000
     chunk_size_tokens = min(100_000, max_tokens_per_chunk)
 
     chunks = chunk_content_by_tokens(context, chunk_size_tokens)
@@ -232,7 +236,7 @@ def ask_gemini(question, context, model, generation_config, selected_model, syst
     if len(responses) > 1:
         # Combine and summarize responses
         responses_text = "\n\n".join([resp.text for resp in responses])
-        final_prompt = f"Summarize the following responses to the question: '{question}'\n\n{responses_text}"
+        final_prompt = f"Based on the following responses, provide a concise and accurate answer to the question: '{question}'\n\n{responses_text}"
         if system_prompt:
             final_prompt = f"{system_prompt}\n\n{final_prompt}"
         try:
@@ -315,19 +319,6 @@ def main():
                 if full_document_content.strip() == "":
                     st.error("No valid text content found in the uploaded files.")
                     return
-                # Use tiktoken to count tokens
-                context_tokens = count_tokens(full_document_content)
-                if context_tokens > MAX_TOTAL_TOKENS:
-                    st.warning("The uploaded documents exceed the model's maximum context size. The content will need to be summarized, which may reduce granularity and affect accuracy.")
-                    if st.button("Proceed with summarization"):
-                        with st.spinner("Summarizing the content... This may take a while."):
-                            summarized_content = chunk_and_summarize_content(full_document_content, model, generation_config, selected_model)
-                            if summarized_content is None:
-                                st.error("Error during summarization.")
-                                return
-                            full_document_content = summarized_content
-                    else:
-                        st.stop()  # Stop execution until the user clicks the button
                 # Cache the content and files hash
                 st.session_state['document_contents'] = full_document_content
                 st.session_state['files_hash'] = hash(files_info)
@@ -364,6 +355,27 @@ def main():
 
     if st.button("Get Answer"):
         if user_question:
+            # Retrieve full_document_content from session state
+            full_document_content = st.session_state.get('document_contents', '')
+            if not full_document_content:
+                st.error("No document content available.")
+                return
+
+            # Compute total tokens
+            question_tokens = count_tokens(user_question)
+            context_tokens = count_tokens(full_document_content)
+            total_tokens = question_tokens + context_tokens
+
+            if total_tokens > MAX_TOTAL_TOKENS:
+                st.warning("The total content exceeds the model's maximum context size. The content will need to be summarized, which may reduce granularity and affect accuracy.")
+                with st.spinner("Summarizing the content... This may take a while."):
+                    summarized_content = chunk_and_summarize_content(full_document_content, user_question, model, generation_config, selected_model)
+                    if summarized_content is None:
+                        st.error("Error during summarization.")
+                        return
+                    full_document_content = summarized_content
+                    # Update the content in session state
+                    st.session_state['document_contents'] = full_document_content
             with st.spinner("Generating answer... This may take a while."):
                 try:
                     answer = ask_gemini(user_question, full_document_content, model, generation_config, selected_model, system_prompt)
