@@ -143,14 +143,17 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
     prompt_without_chunk_tokens = count_tokens(prompt_without_chunk)
 
     # Calculate maximum allowed tokens for chunk
-    max_chunk_tokens = max_context_tokens - prompt_without_chunk_tokens - max_output_tokens - 100  # reserve 100 tokens as buffer
+    max_chunk_tokens = max_context_tokens - prompt_without_chunk_tokens - max_output_tokens - 100  # reserve buffer
 
     if max_chunk_tokens <= 0:
         st.error("The question and system prompt are too long to fit in the context window.")
         return ""
 
-    # Now, chunk the context based on max_chunk_tokens
-    chunks = chunk_content_by_tokens(context, max_chunk_tokens)
+    # Adjust for potential tokenizer discrepancies by reducing chunk size
+    adjusted_max_chunk_tokens = int(max_chunk_tokens * 0.9)
+
+    # Now, chunk the context based on adjusted_max_chunk_tokens
+    chunks = chunk_content_by_tokens(context, adjusted_max_chunk_tokens)
 
     responses = []
 
@@ -160,12 +163,13 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
             prompt = f"{system_prompt}\n\nContext:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
         else:
             prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
+        # Recalculate prompt tokens
+        prompt_tokens = count_tokens(prompt)
+        total_tokens = prompt_tokens + max_output_tokens + 100  # buffer
+        if total_tokens > max_context_tokens:
+            st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
+            return ""
         try:
-            # Recalculate prompt tokens
-            prompt_tokens = count_tokens(prompt)
-            if prompt_tokens + max_output_tokens + 100 > max_context_tokens:
-                st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
-                return ""
             response = model.generate_content(prompt, generation_config=generation_config)
             responses.append(response.text)
         except Exception as e:
@@ -182,7 +186,8 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
             final_prompt = f"{system_prompt}\n\n{final_prompt}"
         # Recalculate tokens for the final prompt
         final_prompt_tokens = count_tokens(final_prompt)
-        if final_prompt_tokens + max_output_tokens + 100 > max_context_tokens:
+        total_tokens = final_prompt_tokens + max_output_tokens + 100  # buffer
+        if total_tokens > max_context_tokens:
             st.error("The combined responses are too long to summarize.")
             return ""
         try:
@@ -208,7 +213,10 @@ def chunk_and_summarize_content(content, question, model, generation_config, max
         st.error("The question is too long to fit in the context window.")
         return None
 
-    chunks = chunk_content_by_tokens(content, max_chunk_tokens)
+    # Adjust for potential tokenizer discrepancies by reducing chunk size
+    adjusted_max_chunk_tokens = int(max_chunk_tokens * 0.9)
+
+    chunks = chunk_content_by_tokens(content, adjusted_max_chunk_tokens)
 
     summaries = []
     progress_bar = st.progress(0)
@@ -216,7 +224,8 @@ def chunk_and_summarize_content(content, question, model, generation_config, max
         prompt = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {question}\n\nContent:\n{chunk}"
         # Recalculate prompt tokens
         prompt_tokens = count_tokens(prompt)
-        if prompt_tokens + max_output_tokens + 100 > max_context_tokens:
+        total_tokens = prompt_tokens + max_output_tokens + 100  # buffer
+        if total_tokens > max_context_tokens:
             st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
             return None
         try:
@@ -256,20 +265,20 @@ def main():
     vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
 
     # Model selection
-    model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
+    model_options = ["gemini-1p5-chat", "gemini-1p3-chat", "chat-bison@001"]
     selected_model = st.selectbox("Select Gemini Model:", model_options)
 
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.number_input("Max Output Tokens:", min_value=1, max_value=8192, value=8000)
+    max_output_tokens = st.sidebar.number_input("Max Output Tokens:", min_value=1, max_value=8192, value=1000)
     top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=0.95)
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
 
     # Set MAX_CONTEXT_TOKENS based on selected model
-    if selected_model == "gemini-1.5-flash-002":
+    if selected_model == "gemini-1p5-chat":
         MAX_CONTEXT_TOKENS = 500_000
-    elif selected_model == "gemini-1.5-pro-002":
+    elif selected_model == "gemini-1p3-chat":
         MAX_CONTEXT_TOKENS = 1_000_000
     else:
         MAX_CONTEXT_TOKENS = 8192  # default
