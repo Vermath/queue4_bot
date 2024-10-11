@@ -8,6 +8,7 @@ import os
 from google.oauth2 import service_account
 from PyPDF2 import PdfReader
 import tiktoken
+import concurrent.futures
 
 # Initialize tiktoken encoding
 enc = tiktoken.get_encoding("cl100k_base")
@@ -155,33 +156,44 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
     # Now, chunk the context based on adjusted_max_chunk_tokens
     chunks = chunk_content_by_tokens(context, adjusted_max_chunk_tokens)
 
-    responses = []
-
-    progress_bar = st.progress(0)
-    for idx, chunk in enumerate(chunks):
+    # Prepare prompts for each chunk
+    prompts = []
+    for chunk in chunks:
         if system_prompt:
             prompt = f"{system_prompt}\n\nContext:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
         else:
             prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
-        # Recalculate prompt tokens
-        prompt_tokens = count_tokens(prompt)
-        total_tokens = prompt_tokens + max_output_tokens + 100  # buffer
-        if total_tokens > max_context_tokens:
-            st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
-            return ""
-        try:
-            response = model.generate_content(prompt, generation_config=generation_config)
-            responses.append(response.text)
-        except Exception as e:
-            st.error(f"Error from Gemini API: {str(e)}")
-            return ""  # Stop processing if there's an error
-        progress_bar.progress((idx + 1) / len(chunks))
+        prompts.append(prompt)
 
-    progress_bar.empty()
+    # Send requests concurrently
+    responses = []
+    errors = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = []
+        for idx, prompt in enumerate(prompts):
+            futures.append(executor.submit(call_model, model, prompt, generation_config, idx))
+        progress_bar = st.progress(0)
+        for future in concurrent.futures.as_completed(futures):
+            idx, result, error = future.result()
+            if error:
+                errors.append(f"Error in chunk {idx+1}: {error}")
+            else:
+                responses.append((idx, result))
+            progress_bar.progress((len(responses) + len(errors)) / len(prompts))
+        progress_bar.empty()
 
-    if len(responses) > 1:
+    # Sort responses based on chunk index
+    responses.sort(key=lambda x: x[0])
+    responses_text = [r[1] for r in responses]
+
+    if errors:
+        for error in errors:
+            st.error(error)
+        return ""
+
+    if len(responses_text) > 1:
         # Combine and summarize responses
-        final_prompt = f"Provide a comprehensive answer to the question '{question}' based on the following responses:\n\n" + "\n\n".join(responses)
+        final_prompt = f"Provide a comprehensive answer to the question '{question}' based on the following responses:\n\n" + "\n\n".join(responses_text)
         if system_prompt:
             final_prompt = f"{system_prompt}\n\n{final_prompt}"
         # Recalculate tokens for the final prompt
@@ -197,7 +209,15 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
             st.error(f"Error from Gemini API during summarization: {str(e)}")
             return ""
     else:
-        return responses[0]
+        return responses_text[0]
+
+def call_model(model, prompt, generation_config, idx):
+    """Helper function to call the model and return results with index."""
+    try:
+        response = model.generate_content(prompt, generation_config=generation_config)
+        return idx, response.text, None
+    except Exception as e:
+        return idx, None, str(e)
 
 def chunk_and_summarize_content(content, question, model, generation_config, max_context_tokens, max_output_tokens):
     """Chunk and summarize content based on the question."""
@@ -218,26 +238,40 @@ def chunk_and_summarize_content(content, question, model, generation_config, max
 
     chunks = chunk_content_by_tokens(content, adjusted_max_chunk_tokens)
 
-    summaries = []
-    progress_bar = st.progress(0)
-    for idx, chunk in enumerate(chunks):
+    # Prepare prompts for each chunk
+    prompts = []
+    for chunk in chunks:
         prompt = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {question}\n\nContent:\n{chunk}"
-        # Recalculate prompt tokens
-        prompt_tokens = count_tokens(prompt)
-        total_tokens = prompt_tokens + max_output_tokens + 100  # buffer
-        if total_tokens > max_context_tokens:
-            st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
-            return None
-        try:
-            response = model.generate_content(prompt, generation_config=generation_config)
-            summaries.append(response.text)
-        except Exception as e:
-            st.error(f"Error summarizing chunk {idx+1}: {str(e)}")
-            return None
-        progress_bar.progress((idx + 1) / len(chunks))
-    progress_bar.empty()
+        prompts.append(prompt)
+
+    # Send requests concurrently
+    summaries = []
+    errors = []
+    with concurrent.futures.ThreadPoolExecutor() as executor:
+        futures = []
+        for idx, prompt in enumerate(prompts):
+            futures.append(executor.submit(call_model, model, prompt, generation_config, idx))
+        progress_bar = st.progress(0)
+        for future in concurrent.futures.as_completed(futures):
+            idx, result, error = future.result()
+            if error:
+                errors.append(f"Error summarizing chunk {idx+1}: {error}")
+            else:
+                summaries.append((idx, result))
+            progress_bar.progress((len(summaries) + len(errors)) / len(prompts))
+        progress_bar.empty()
+
+    # Sort summaries based on chunk index
+    summaries.sort(key=lambda x: x[0])
+    summaries_text = [s[1] for s in summaries]
+
+    if errors:
+        for error in errors:
+            st.error(error)
+        return None
+
     # Combine summaries
-    combined_summary = "\n".join(summaries)
+    combined_summary = "\n".join(summaries_text)
     return combined_summary
 
 # -------------------- Streamlit App -------------------- #
@@ -276,9 +310,9 @@ def main():
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
 
     # Set MAX_CONTEXT_TOKENS based on selected model
-    if selected_model == "gemini-1p5-chat":
+    if selected_model == "gemini-1.5-flash-002":
         MAX_CONTEXT_TOKENS = 500_000
-    elif selected_model == "gemini-1p3-chat":
+    elif selected_model == "gemini-1.5-pro-002":
         MAX_CONTEXT_TOKENS = 1_000_000
     else:
         MAX_CONTEXT_TOKENS = 8192  # default
