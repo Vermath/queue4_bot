@@ -114,26 +114,6 @@ def chunk_content_by_tokens(text, max_tokens):
         start = end
     return chunks
 
-def chunk_and_summarize_content(content, question, model, generation_config, max_chunk_tokens):
-    """Chunk and summarize content based on the question."""
-    st.info("Content is large. Summarizing in chunks based on your question to fit the model's context window...")
-    chunks = chunk_content_by_tokens(content, max_chunk_tokens)
-    summaries = []
-    progress_bar = st.progress(0)
-    for idx, chunk in enumerate(chunks):
-        prompt = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {question}\n\nContent:\n{chunk}"
-        try:
-            response = model.generate_content(prompt, generation_config=generation_config)
-            summaries.append(response.text)
-        except Exception as e:
-            st.error(f"Error summarizing chunk {idx+1}: {str(e)}")
-            return None
-        progress_bar.progress((idx + 1) / len(chunks))
-    progress_bar.empty()
-    # Combine summaries
-    combined_summary = "\n".join(summaries)
-    return combined_summary
-
 def count_tokens_tiktoken(text):
     """Count tokens in text using tiktoken."""
     tokens = enc.encode(text)
@@ -153,25 +133,27 @@ def count_tokens(text, chunk_size=10000):
 
 def ask_gemini(question, context, model, generation_config, system_prompt="", max_context_tokens=8192, max_output_tokens=8000):
     """Generate an answer from the Gemini model based on the question and context."""
-    # Calculate tokens used by the question and system prompt
-    prompt_text = ""
+    # Build the prompt without the chunk
+    prompt_without_chunk = ""
     if system_prompt:
-        prompt_text += system_prompt + "\n\n"
-    prompt_text += f"Question: {question}\n\nAnswer:"
-    prompt_tokens = count_tokens(prompt_text)
-    
-    # Calculate available tokens for context
-    available_tokens_for_context = max_context_tokens - prompt_tokens - max_output_tokens - 100  # reserve 100 tokens as buffer
+        prompt_without_chunk += system_prompt + "\n\n"
+    prompt_without_chunk += "Context:\n"
+    prompt_without_chunk += "\n\nQuestion: " + question + "\n\nAnswer:"
 
-    if available_tokens_for_context <= 0:
+    prompt_without_chunk_tokens = count_tokens(prompt_without_chunk)
+
+    # Calculate maximum allowed tokens for chunk
+    max_chunk_tokens = max_context_tokens - prompt_without_chunk_tokens - max_output_tokens - 100  # reserve 100 tokens as buffer
+
+    if max_chunk_tokens <= 0:
         st.error("The question and system prompt are too long to fit in the context window.")
         return ""
-    
-    # Now, chunk the context based on available tokens
-    chunks = chunk_content_by_tokens(context, available_tokens_for_context)
-    
+
+    # Now, chunk the context based on max_chunk_tokens
+    chunks = chunk_content_by_tokens(context, max_chunk_tokens)
+
     responses = []
-    
+
     progress_bar = st.progress(0)
     for idx, chunk in enumerate(chunks):
         if system_prompt:
@@ -179,15 +161,20 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
         else:
             prompt = f"Context:\n{chunk}\n\nQuestion: {question}\n\nAnswer:"
         try:
+            # Recalculate prompt tokens
+            prompt_tokens = count_tokens(prompt)
+            if prompt_tokens + max_output_tokens + 100 > max_context_tokens:
+                st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
+                return ""
             response = model.generate_content(prompt, generation_config=generation_config)
             responses.append(response.text)
         except Exception as e:
             st.error(f"Error from Gemini API: {str(e)}")
             return ""  # Stop processing if there's an error
         progress_bar.progress((idx + 1) / len(chunks))
-    
+
     progress_bar.empty()
-    
+
     if len(responses) > 1:
         # Combine and summarize responses
         final_prompt = f"Provide a comprehensive answer to the question '{question}' based on the following responses:\n\n" + "\n\n".join(responses)
@@ -207,11 +194,48 @@ def ask_gemini(question, context, model, generation_config, system_prompt="", ma
     else:
         return responses[0]
 
+def chunk_and_summarize_content(content, question, model, generation_config, max_context_tokens, max_output_tokens):
+    """Chunk and summarize content based on the question."""
+    st.info("Content is large. Summarizing in chunks based on your question to fit the model's context window...")
+
+    # Build the prompt without the chunk
+    prompt_without_chunk = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {question}\n\nContent:\n"
+
+    prompt_without_chunk_tokens = count_tokens(prompt_without_chunk)
+    max_chunk_tokens = max_context_tokens - prompt_without_chunk_tokens - max_output_tokens - 100  # reserve buffer
+
+    if max_chunk_tokens <= 0:
+        st.error("The question is too long to fit in the context window.")
+        return None
+
+    chunks = chunk_content_by_tokens(content, max_chunk_tokens)
+
+    summaries = []
+    progress_bar = st.progress(0)
+    for idx, chunk in enumerate(chunks):
+        prompt = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {question}\n\nContent:\n{chunk}"
+        # Recalculate prompt tokens
+        prompt_tokens = count_tokens(prompt)
+        if prompt_tokens + max_output_tokens + 100 > max_context_tokens:
+            st.error(f"The prompt for chunk {idx+1} exceeds the model's maximum context size.")
+            return None
+        try:
+            response = model.generate_content(prompt, generation_config=generation_config)
+            summaries.append(response.text)
+        except Exception as e:
+            st.error(f"Error summarizing chunk {idx+1}: {str(e)}")
+            return None
+        progress_bar.progress((idx + 1) / len(chunks))
+    progress_bar.empty()
+    # Combine summaries
+    combined_summary = "\n".join(summaries)
+    return combined_summary
+
 # -------------------- Streamlit App -------------------- #
 
 def main():
     st.title("Document Analysis with Gemini")
-    
+
     # Instructions
     st.write("""
     **Instructions:**
@@ -224,35 +248,35 @@ def main():
     - Please be patient as the model may take a few minutes to respond.
     - You can modify the system prompt to change the behavior of the model by clicking the checkbox after file upload.
     """)
-    
+
     # Load service account credentials from secrets
     credentials = service_account.Credentials.from_service_account_info(st.secrets["service_account"])
-    
+
     # Initialize Vertex AI with credentials
     vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
-    
+
     # Model selection
     model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
     selected_model = st.selectbox("Select Gemini Model:", model_options)
-    
+
     # Parameter adjustments
     st.sidebar.header("Model Parameters")
     temperature = st.sidebar.slider("Temperature:", min_value=0.0, max_value=1.0, value=0.7)
-    max_output_tokens = st.sidebar.slider("Max Output Tokens:", min_value=1, max_value=8192, value=8000)
+    max_output_tokens = st.sidebar.number_input("Max Output Tokens:", min_value=1, max_value=8192, value=8000)
     top_p = st.sidebar.slider("Top P:", min_value=0.0, max_value=1.0, value=0.95)
     top_k = st.sidebar.slider("Top K:", min_value=1, max_value=40, value=40)
-    
+
     # Set MAX_CONTEXT_TOKENS based on selected model
     if selected_model == "gemini-1.5-flash-002":
-        MAX_CONTEXT_TOKENS = 950_000
+        MAX_CONTEXT_TOKENS = 500_000
     elif selected_model == "gemini-1.5-pro-002":
-        MAX_CONTEXT_TOKENS = 1_950_000
+        MAX_CONTEXT_TOKENS = 1_000_000
     else:
         MAX_CONTEXT_TOKENS = 8192  # default
-    
+
     # Create the model
     model = GenerativeModel(selected_model)
-    
+
     # Create the generation config
     generation_config = GenerationConfig(
         temperature=temperature,
@@ -260,14 +284,14 @@ def main():
         top_p=top_p,
         top_k=top_k
     )
-    
+
     # File uploader to upload multiple files, including ZIP files
     uploaded_files = st.file_uploader(
         "Upload .txt, .docx, .pdf, or .zip files",
         type=["txt", "docx", "pdf", "zip"],
         accept_multiple_files=True
     )
-    
+
     if uploaded_files:
         # Create a hashable representation of the uploaded files
         files_info = tuple((f.name, f.size) for f in uploaded_files)
@@ -287,17 +311,17 @@ def main():
     else:
         st.info("Please upload files to proceed.")
         return
-    
+
     # User input
     user_question = st.text_input("Ask a question about the uploaded documents:")
-    
+
     # Custom system prompt
     use_custom_system_prompt = st.checkbox("Use custom system prompt")
     if use_custom_system_prompt:
         system_prompt = st.text_area("Enter system prompt:")
     else:
         system_prompt = ""  # You can set a default system prompt here if desired
-    
+
     # Token counting button
     if st.button("Count Tokens"):
         if user_question:
@@ -312,23 +336,34 @@ def main():
                 st.error(f"Error counting tokens: {str(e)}")
         else:
             st.warning("Please enter a question.")
-    
+
     if st.button("Get Answer"):
         if user_question:
             # Check if total tokens exceed the model's limit
             question_tokens = count_tokens(user_question)
             context_tokens = count_tokens(full_document_content)
             total_tokens = question_tokens + context_tokens
-            
+
             if total_tokens > MAX_CONTEXT_TOKENS:
                 # Warn the user about potential loss of granularity
                 st.warning("The combined content and question exceed the model's maximum context size. The content will be summarized based on your question, which may reduce granularity and affect accuracy.")
                 # Calculate available tokens for context during summarization
-                available_tokens_for_context = MAX_CONTEXT_TOKENS - question_tokens - max_output_tokens - 100
+                # Build the prompt without the chunk
+                prompt_without_chunk = f"Based on the following question, summarize the relevant points from the content:\n\nQuestion: {user_question}\n\nContent:\n"
+
+                prompt_without_chunk_tokens = count_tokens(prompt_without_chunk)
+                available_tokens_for_context = MAX_CONTEXT_TOKENS - prompt_without_chunk_tokens - max_output_tokens - 100
                 if available_tokens_for_context <= 0:
                     st.error("The question is too long to fit in the context window.")
                     return
-                summarized_content = chunk_and_summarize_content(full_document_content, user_question, model, generation_config, available_tokens_for_context)
+                summarized_content = chunk_and_summarize_content(
+                    full_document_content,
+                    user_question,
+                    model,
+                    generation_config,
+                    max_context_tokens=MAX_CONTEXT_TOKENS,
+                    max_output_tokens=max_output_tokens
+                )
                 if summarized_content is None:
                     st.error("Error during summarization.")
                     return
@@ -337,7 +372,7 @@ def main():
             else:
                 # Use the original content
                 full_document_content = st.session_state['document_contents']
-            
+
             with st.spinner("Generating answer... This may take a while."):
                 try:
                     answer = ask_gemini(
