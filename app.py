@@ -265,7 +265,7 @@ def main():
     vertexai.init(project="vertex-ai-development", location="us-central1", credentials=credentials)
 
     # Model selection
-    model_options = ["gemini-1p5-chat", "gemini-1p3-chat", "chat-bison@001"]
+    model_options = ["gemini-1.5-flash-002", "gemini-1.5-pro-002"]
     selected_model = st.selectbox("Select Gemini Model:", model_options)
 
     # Parameter adjustments
